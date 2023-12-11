@@ -56,6 +56,7 @@ pub const USE_DIV2: bool = true; /* // */
 pub const USE_GCD: bool = false;
 pub const USE_NEG: bool = true;
 pub const USE_EXP: bool = true;
+pub const USE_PARENS: bool = true;
 
 /// Use C-style modulo and division (-2 % 10 == -2) rather than Python style (-2 % 10 == 8).
 pub const C_STYLE_MOD: bool = false;

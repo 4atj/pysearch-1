@@ -88,7 +88,7 @@ fn save(level: &mut CacheLevel, output: Vector, expr: Expr, n: usize, cache: &Ca
         if n + 1 <= MAX_LENGTH {
             find_unary_expression(level, cache, n + 1, (&output, &expr));
         }
-        if n + 2 < MAX_LENGTH && expr.op < Operator::Parens {
+        if USE_PARENS && n + 2 < MAX_LENGTH && expr.op < Operator::Parens {
             save(level, output, Expr::parens((&expr).into()), n + 2, cache);
         }
         return;
@@ -418,6 +418,9 @@ fn find_unary_expressions(cn: &mut CacheLevel, cache: &Cache, n: usize) {
 }
 
 fn find_parens_expressions(cn: &mut CacheLevel, cache: &Cache, n: usize) {
+    if !USE_PARENS {
+        return;
+    }
     for (or, er) in &cache[n - 2] {
         if !can_use_required_vars(er.var_mask, n) {
             return;
