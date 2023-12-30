@@ -1,3 +1,4 @@
+cargo-features = ["profile-rustflags"]
 [package]
 name = "pysearch"
 version = "0.1.0"
@@ -7,6 +8,9 @@ edition = "2021"
 
 [profile.dev]
 overflow-checks = false
+
+[profile.release]
+rustflags = ["-Copt-level=3", "-Cllvm-args=-unroll-threshold=100000"]
 
 [features]
 simd = []
