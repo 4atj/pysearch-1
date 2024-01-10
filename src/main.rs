@@ -84,7 +84,7 @@ fn save(level: &mut CacheLevel, expr: Expr, n: usize, cache: &Cache, hashset_cac
         if n + 1 <= MAX_LENGTH {
             find_unary_operators(level, cache, hashset_cache, n + 1, &expr);
         }
-        if !is_leaf_expr(OP_INDEX_PARENS, n + 2) && expr.op_idx < OP_INDEX_PARENS {
+        if USE_PARENS && !is_leaf_expr(OP_INDEX_PARENS, n + 2) && expr.op_idx < OP_INDEX_PARENS {
             save(
                 level,
                 Expr::parens((&expr).into()),
@@ -230,8 +230,19 @@ fn find_unary_expressions(
     if n < 2 {
         return;
     }
-    for r in &cache[n - 1] {
-        find_unary_operators(cn, cache, hashset_cache, n, r);
+    if n <= MAX_CACHE_LENGTH || NUMBER_OF_CHUNKS == 1 {
+        for er in &cache[n - 1] {
+            find_unary_operators(cn, cache, hashset_cache, n, er);
+        }
+    } else {
+        for er in cache[n - 1]
+            .get(CHUNK_ID..)
+            .unwrap_or(&[])
+            .iter()
+            .step_by(NUMBER_OF_CHUNKS)
+        {
+            find_unary_operators(cn, cache, hashset_cache, n, er);
+        }
     }
 }
 
@@ -241,15 +252,34 @@ fn find_parens_expressions(
     hashset_cache: &HashSetCache,
     n: usize,
 ) {
+    if !USE_PARENS {
+        return;
+    }
     if n < 4 || is_leaf_expr(OP_INDEX_PARENS, n) {
         return;
     }
-    for er in &cache[n - 2] {
-        if !can_use_required_vars(er.var_mask, n) {
-            continue;
+    if n <= MAX_CACHE_LENGTH || NUMBER_OF_CHUNKS == 1 {
+        for er in &cache[n - 1] {
+            if !can_use_required_vars(er.var_mask, n) {
+                continue;
+            }
+            if er.op_idx < OP_INDEX_PARENS {
+                save(cn, Expr::parens(er), n, cache, hashset_cache);
+            }
         }
-        if er.op_idx < OP_INDEX_PARENS {
-            save(cn, Expr::parens(er), n, cache, hashset_cache);
+    } else {
+        for er in cache[n - 2]
+            .get(CHUNK_ID..)
+            .unwrap_or(&[])
+            .iter()
+            .step_by(NUMBER_OF_CHUNKS)
+        {
+            if !can_use_required_vars(er.var_mask, n) {
+                continue;
+            }
+            if er.op_idx < OP_INDEX_PARENS {
+                save(cn, Expr::parens(er), n, cache, hashset_cache);
+            }
         }
     }
 }
@@ -319,33 +349,72 @@ fn find_expressions_multithread(
     let cache = &mut_cache;
     let hashset_cache = &mut_hashset_cache;
 
-    let mut cn = (1..n - 1)
-        .into_par_iter()
-        .flat_map(|k| {
-            cache[k].par_iter().map(move |r| {
-                let mut cn = CacheLevel::new();
-                find_binary_expressions_left(&mut cn, cache, hashset_cache, n, k, r);
-                cn
+    let mut cn = if n <= MAX_CACHE_LENGTH || NUMBER_OF_CHUNKS == 1 {
+        (1..n - 1)
+            .into_par_iter()
+            .flat_map(|k| {
+                cache[k].par_iter().map(move |r| {
+                    let mut cn = CacheLevel::new();
+                    find_binary_expressions_left(&mut cn, cache, hashset_cache, n, k, r);
+                    cn
+                })
             })
-        })
-        .chain(
-            std::iter::once_with(|| {
-                let mut cn = CacheLevel::new();
-                find_parens_expressions(&mut cn, cache, hashset_cache, n);
-                cn
+            .chain(
+                std::iter::once_with(|| {
+                    let mut cn = CacheLevel::new();
+                    find_parens_expressions(&mut cn, cache, hashset_cache, n);
+                    cn
+                })
+                .par_bridge(),
+            )
+            .chain(
+                std::iter::once_with(|| {
+                    let mut cn = CacheLevel::new();
+                    find_unary_expressions(&mut cn, cache, hashset_cache, n);
+                    cn
+                })
+                .par_bridge(),
+            )
+            .flatten_iter()
+            .collect()
+    } else {
+        (1..n - 1)
+            .into_par_iter()
+            .flat_map(|k| {
+                (0..cache[k].len().saturating_sub(CHUNK_ID) / NUMBER_OF_CHUNKS)
+                    .into_par_iter()
+                    .map(move |ir| {
+                        let mut cn = CacheLevel::new();
+                        find_binary_expressions_left(
+                            &mut cn,
+                            cache,
+                            hashset_cache,
+                            n,
+                            k,
+                            &cache[k][ir * NUMBER_OF_CHUNKS + CHUNK_ID],
+                        );
+                        cn
+                    })
             })
-            .par_bridge(),
-        )
-        .chain(
-            std::iter::once_with(|| {
-                let mut cn = CacheLevel::new();
-                find_unary_expressions(&mut cn, cache, hashset_cache, n);
-                cn
-            })
-            .par_bridge(),
-        )
-        .flatten_iter()
-        .collect();
+            .chain(
+                std::iter::once_with(|| {
+                    let mut cn = CacheLevel::new();
+                    find_parens_expressions(&mut cn, cache, hashset_cache, n);
+                    cn
+                })
+                .par_bridge(),
+            )
+            .chain(
+                std::iter::once_with(|| {
+                    let mut cn = CacheLevel::new();
+                    find_unary_expressions(&mut cn, cache, hashset_cache, n);
+                    cn
+                })
+                .par_bridge(),
+            )
+            .flatten_iter()
+            .collect()
+    };
 
     find_variables_and_literals(&mut cn, n);
 
@@ -358,14 +427,22 @@ fn find_expressions(cache: &mut Cache, hashset_cache: &mut HashSetCache, n: usiz
     find_parens_expressions(&mut cn, cache, hashset_cache, n);
     find_unary_expressions(&mut cn, cache, hashset_cache, n);
     for k in 1..n - 1 {
-        for r in &cache[k] {
-            find_binary_expressions_left(&mut cn, cache, hashset_cache, n, k, r);
+        for er in &cache[k] {
+            find_binary_expressions_left(&mut cn, cache, hashset_cache, n, k, er);
         }
     }
     add_to_cache(cn, cache, hashset_cache);
 }
 
 fn main() {
+    assert!(
+        CHUNK_ID < NUMBER_OF_CHUNKS,
+        "CHUNK_ID must be less than NUMBER_OF_CHUNKS"
+    );
+    assert!(
+        NUMBER_OF_CHUNKS == 1 || MAX_CACHE_LENGTH < MIN_MULTITHREAD_LENGTH,
+        "Multithreading cached lengths is not supported when the search space is divided into multiple chunks"
+    );
     for i in INPUTS {
         assert_eq!(
             i.vec.len(),
