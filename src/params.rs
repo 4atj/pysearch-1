@@ -88,6 +88,8 @@ pub const UNARY_OPERATORS: &[UnaryOp] = &[
     // OP_NOT,
 ];
 
+pub const USE_PARENS: bool = true;
+
 /// Match leaf expressions 1 output at a time to avoid unnecessary precalculations
 pub const MATCH_1BY1: bool = true;
 
@@ -96,3 +98,6 @@ pub const REUSE_VARS: bool = true;
 
 /// Controls whether all declared variables should be always used.
 pub const USE_ALL_VARS: bool = true;
+
+pub const CHUNK_ID: usize = 0;
+pub const NUMBER_OF_CHUNKS: usize = 1;

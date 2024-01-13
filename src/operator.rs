@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{
     expr::{ok_after_keyword, ok_before_keyword, Expr},
-    params::{Num, BINARY_OPERATORS, UNARY_OPERATORS},
+    params::{Num, BINARY_OPERATORS, NUMBER_OF_CHUNKS, UNARY_OPERATORS},
     vec::Vector,
 };
 
@@ -96,14 +96,15 @@ impl BinaryOp {
         }
         let prec = self.prec;
         if self.commutative {
-            if self.right_assoc {
-                el.prec() > prec
-                    && (er.prec() > prec && el as *const Expr <= er as *const Expr
-                        || er.prec() == prec)
+            let ordered = if NUMBER_OF_CHUNKS == 1 {
+                el as *const Expr <= er as *const Expr
             } else {
-                er.prec() > prec
-                    && (el.prec() > prec && el as *const Expr <= er as *const Expr
-                        || el.prec() == prec)
+                el.output[0] <= er.output[0]
+            };
+            if self.right_assoc {
+                el.prec() > prec && (er.prec() > prec && ordered || er.prec() == prec)
+            } else {
+                er.prec() > prec && (el.prec() > prec && ordered || el.prec() == prec)
             }
         } else {
             if self.right_assoc {
