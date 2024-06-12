@@ -18,6 +18,13 @@ pub const VARIABLES: &[Variable] = &[
         max_uses: 255,
     },
     Variable {
+        name: "t",
+        min_length: 3,
+        max_length: !0,
+        min_uses: 0,
+        max_uses: 255,
+    },
+    Variable {
         name: "f",
         min_length: 3,
         max_length: !0,
@@ -64,7 +71,7 @@ impl Matcher {
 
 pub const GOAL: &[Num] = &[1, -1, 0, 0];
 
-pub const MAX_LENGTH: usize = 14;
+pub const MAX_LENGTH: usize = 18;
 pub const MAX_CACHE_LENGTH: usize = 10;
 pub const MIN_MULTITHREAD_LENGTH: usize = MAX_CACHE_LENGTH + 1;
 

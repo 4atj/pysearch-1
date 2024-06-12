@@ -1,12 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::{fmt::Display, ptr::NonNull};
 
-use crate::{
-    operator::*,
-    params::{Num, INPUTS},
-    symbols::SYMBOLS,
-    vec::Vector,
-};
+use crate::{operator::*, params::Num, symbols::SYMBOLS, vec::Vector};
 
 pub type VarCount = [u8; SYMBOLS.len()];
 

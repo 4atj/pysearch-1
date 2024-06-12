@@ -47,12 +47,14 @@ fn can_use_required_vars(var_count: VarCount, length: usize) -> bool {
     length + missing_uses as usize * 2 <= MAX_LENGTH
 }
 
-fn is_leaf_expr(op_idx: OpIndex, length: usize) -> bool {
-    length == MAX_LENGTH
-        || length == MAX_LENGTH - 1 && (UNARY_OPERATORS.len() == 0 || op_idx.prec() < UnaryOp::PREC)
+fn uses_required_vars(var_count: VarCount) -> bool {
+    var_count
+        .iter()
+        .zip(SYMBOLS.iter())
+        .all(|(&c, s)| c >= s.min_uses)
 }
 
-fn is_var_leaf_expr(op_idx: OpIndex, length: usize, max_length: usize) -> bool {
+fn is_leaf_expr(op_idx: OpIndex, length: usize, max_length: usize) -> bool {
     length == max_length
         || length == max_length - 1 && (UNARY_OPERATORS.len() == 0 || op_idx.prec() < UnaryOp::PREC)
 }
@@ -92,61 +94,52 @@ fn save(
     expr: Expr,
     expr_length: usize,
 ) {
-    let var_index = exprs.len();
-    let is_last_var = cache.len() == VARIABLES.len();
-    let variable = &VARIABLES[var_index];
-
-    // TODO: don't recalculate those!
-    let total_var_count = add_var_counts(var_count, expr.var_count).unwrap();
     let total_length = exprs_length + expr_length + 3;
 
-    let min_length_needed = VARIABLES[var_index..]
+    if !MATCH_1BY1 && is_leaf_expr(expr.op_idx, total_length, MAX_LENGTH) {
+        if Matcher::match_all(exprs, &expr) {
+            for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
+                print!("{}={e};", v.name);
+            }
+            println!("{}={expr};", VARIABLES.last().unwrap().name);
+        }
+        return;
+    }
+
+    let var_index = exprs.len();
+    let variable = &VARIABLES[var_index];
+
+    let total_var_count = add_var_counts(var_count, expr.var_count).unwrap();
+
+    if VARIABLES.len() == 1 {
+        let cant_use_more_vars = !has_unlimited_var()
+            && total_var_count
+                .iter()
+                .zip(INPUTS.iter())
+                .all(|(&c, i)| c == i.max_uses);
+
+        if cant_use_more_vars {
+            let mut mp: HashMap<Num, Num> = HashMap::new();
+            for i in 0..GOAL.len() {
+                if let Some(old) = mp.insert(expr.output[i], GOAL[i]) {
+                    if old != GOAL[i] {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    let min_length_needed = VARIABLES[var_index + 1..]
         .iter()
         .map(|var| var.min_length + 3)
         .sum::<usize>();
 
     let var_max_expr_length = variable
         .max_length
-        .min(MAX_LENGTH - exprs_length + variable.min_length - min_length_needed);
+        .min(MAX_LENGTH - exprs_length - min_length_needed - 3);
 
-    if is_last_var && variable.min_length <= expr_length {
-        let uses_required_vars = total_var_count
-            .iter()
-            .zip(SYMBOLS.iter())
-            .all(|(&c, s)| c >= s.min_uses);
-
-        if uses_required_vars && Matcher::match_all(exprs, &expr) {
-            for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
-                print!("{}={e};", v.name);
-            }
-            println!("{}={expr};", VARIABLES.last().unwrap().name);
-            return;
-        }
-
-        if !MATCH_1BY1 && is_leaf_expr(expr.op_idx, total_length) {
-            return;
-        }
-    }
-
-    let cant_use_more_vars = !has_unlimited_var()
-        && expr
-            .var_count
-            .iter()
-            .zip(INPUTS.iter())
-            .all(|(&c, i)| c == i.max_uses);
-
-    if cant_use_more_vars {
-        let mut mp: HashMap<Num, Num> = HashMap::new();
-        for i in 0..GOAL.len() {
-            if let Some(old) = mp.insert(expr.output[i], GOAL[i]) {
-                if old != GOAL[i] {
-                    return;
-                }
-            }
-        }
-    }
-
-    if expr_length <= variable.max_length - 2 {
+    if expr_length <= var_max_expr_length - 2 {
         let expr_ptr: NonNullExpr = (&expr).into();
         if let Some(e) = hashset_cache.get(&expr_ptr) {
             if e.as_ref().prec() >= expr.prec() {
@@ -156,7 +149,15 @@ fn save(
     }
 
     if expr_length > MAX_CACHE_LENGTH {
+        let is_last_var = var_index == VARIABLES.len() - 1;
         if is_last_var {
+            if uses_required_vars(total_var_count) && Matcher::match_all(exprs, &expr) {
+                for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
+                    print!("{}={e};", v.name);
+                }
+                println!("{}={expr};", VARIABLES.last().unwrap().name);
+            }
+        } else {
             let mut new_exprs = exprs.clone();
             new_exprs.push(&expr);
             find_expressions(cache, new_exprs, total_var_count, total_length);
@@ -198,7 +199,7 @@ fn save(
                 &expr,
             );
         }
-        if !is_var_leaf_expr(OP_INDEX_PARENS, expr_length + 2, var_max_expr_length)
+        if !is_leaf_expr(OP_INDEX_PARENS, expr_length + 2, var_max_expr_length)
             && expr.op_idx < OP_INDEX_PARENS
         {
             save(
@@ -234,7 +235,6 @@ fn find_binary_operators(
     if er.is_literal() && el.is_literal() {
         return;
     }
-    let var_index = exprs.len();
     let expr_var_count = match add_var_counts(el.var_count, er.var_count) {
         Some(vc) => vc,
         None => return,
@@ -250,7 +250,7 @@ fn find_binary_operators(
     seq!(idx in 0..100 {
         if let (Some(&op_idx), Some(op)) = (OP_BINARY_INDEX_TABLE.get(idx), BINARY_OPERATORS.get(idx)) {
             if op.name.len() == op_length && op.can_apply(el, er) {
-                if MATCH_1BY1 && var_index == VARIABLES.len() && is_leaf_expr(op_idx, total_length) {
+                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length, MAX_LENGTH) {
                     let mut matcher = Matcher::new();
                     if el
                         .output
@@ -359,7 +359,7 @@ fn find_unary_operators(
     seq!(idx in 0..10 {
         if let (Some(&op_idx), Some(op)) = (OP_UNARY_INDEX_TABLE.get(idx), UNARY_OPERATORS.get(idx)) {
             if op.can_apply(er) {
-                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length) {
+                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length, MAX_LENGTH) {
                     let mut matcher = Matcher::new();
                     if er
                         .output
@@ -431,7 +431,7 @@ fn find_parens_expressions(
     expr_length: usize,
 ) {
     let total_length = exprs_length + expr_length + 3;
-    if expr_length < 4 || is_leaf_expr(OP_INDEX_PARENS, total_length) {
+    if expr_length < 4 || is_leaf_expr(OP_INDEX_PARENS, total_length, MAX_LENGTH) {
         return;
     }
     let er_length = expr_length - 2;
@@ -637,18 +637,26 @@ fn find_expressions(cache: &mut Cache, exprs: Vec<&Expr>, var_count: VarCount, l
         }
     }
 
-    if var_index < VARIABLES.len() - 1 {
-        for expr_length in variable.min_length..=variable.max_length.min(max_expr_length) {
-            let total_length = length + expr_length + 3;
-            for var_index in 0..cache.len() {
-                for expr_index in 0..cache[var_index][expr_length].len() {
-                    let expr = &cache[var_index][expr_length][expr_index];
-                    if let Some(new_var_count) = add_var_counts(var_count, expr.var_count) {
-                        let mut new_exprs = exprs.clone();
-                        let new_expr = expr.clone();
-                        new_exprs.push(&new_expr);
-                        find_expressions(cache, new_exprs, new_var_count, total_length);
+    let is_last_expr = var_index == VARIABLES.len() - 1;
+    for expr_length in variable.min_length..=variable.max_length.min(max_expr_length) {
+        let total_length = length + expr_length + 3;
+        for var_index in 0..cache.len() {
+            for expr_index in 0..cache[var_index][expr_length].len() {
+                let expr = &cache[var_index][expr_length][expr_index];
+                if let Some(total_var_count) = add_var_counts(var_count, expr.var_count) {
+                    if is_last_expr {
+                        if uses_required_vars(total_var_count) && Matcher::match_all(&exprs, expr) {
+                            for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
+                                print!("{}={e};", v.name);
+                            }
+                            println!("{}={expr};", VARIABLES.last().unwrap().name);
+                        }
+                        continue;
                     }
+                    let mut new_exprs = exprs.clone();
+                    let new_expr = expr.clone();
+                    new_exprs.push(&new_expr);
+                    find_expressions(cache, new_exprs, total_var_count, total_length);
                 }
             }
         }
