@@ -4,10 +4,11 @@ use std::{fmt::Display, ptr::NonNull};
 use crate::{
     operator::*,
     params::{Num, INPUTS},
+    symbols::SYMBOLS,
     vec::Vector,
 };
 
-pub type VarCount = [u8; INPUTS.len()];
+pub type VarCount = [u8; SYMBOLS.len()];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Expr {
@@ -26,7 +27,7 @@ impl Expr {
     }
 
     pub fn variable(index: usize, output: Vector) -> Self {
-        let mut var_count = [0; INPUTS.len()];
+        let mut var_count = [0; SYMBOLS.len()];
         var_count[index] = 1;
         Self {
             left: None,
@@ -42,7 +43,7 @@ impl Expr {
             left: None,
             right: None,
             op_idx: OP_INDEX_LITERAL,
-            var_count: [0; INPUTS.len()],
+            var_count: [0; SYMBOLS.len()],
             output: Vector::constant(value),
         }
     }
@@ -103,7 +104,7 @@ impl Display for Expr {
             write!(
                 f,
                 "{}",
-                INPUTS[self.var_count.iter().position(|&c| c == 1).unwrap()].name
+                SYMBOLS[self.var_count.iter().position(|&c| c == 1).unwrap()].name
             )?;
         } else {
             write!(f, "{}", self.output[0])?;
