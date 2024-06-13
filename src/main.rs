@@ -14,7 +14,7 @@ pub mod vec;
 use expr::{Expr, NonNullExpr, VarCount};
 use operator::*;
 use params::*;
-use symbols::SYMBOLS;
+use symbols::{get_max_expr_length, get_var_max_expr_length, SYMBOLS};
 
 use vec::Vector;
 
@@ -25,7 +25,7 @@ use std::{ptr::NonNull, time::Instant};
 // cache[length][output] = highest-prec expression of that length yielding that output
 type CacheLevel = Vec<Expr>;
 type VarCache = Vec<CacheLevel>;
-type Cache = Vec<VarCache>;
+type Cache<'a> = Vec<&'a VarCache>;
 
 type HashSetCache = HashSet<NonNullExpr>;
 
@@ -38,13 +38,14 @@ fn positive_integer_length(mut k: Num) -> usize {
     l
 }
 
-fn can_use_required_vars(var_count: VarCount, length: usize) -> bool {
-    let missing_uses: u8 = var_count
+fn can_use_required_vars(var_count: VarCount, length: usize, var_index: usize) -> bool {
+    let missing_vars = VARIABLES.len() - var_index - 1;
+    let missing_uses = var_count
         .iter()
-        .zip(INPUTS.iter())
-        .map(|(&c, i)| i.min_uses - std::cmp::min(c, i.min_uses))
-        .sum();
-    length + missing_uses as usize * 2 <= MAX_LENGTH
+        .zip(SYMBOLS.iter())
+        .map(|(&c, i)| i.min_uses - c.min(i.min_uses))
+        .sum::<u8>() as usize;
+    length + missing_uses - missing_vars.min(missing_uses) * 2 + missing_vars * 4 <= MAX_LENGTH
 }
 
 fn uses_required_vars(var_count: VarCount) -> bool {
@@ -54,9 +55,13 @@ fn uses_required_vars(var_count: VarCount) -> bool {
         .all(|(&c, s)| c >= s.min_uses)
 }
 
-fn is_leaf_expr(op_idx: OpIndex, length: usize, max_length: usize) -> bool {
+fn is_var_leaf_expr(op_idx: OpIndex, length: usize, max_length: usize) -> bool {
     length == max_length
         || length == max_length - 1 && (UNARY_OPERATORS.len() == 0 || op_idx.prec() < UnaryOp::PREC)
+}
+
+fn is_leaf_expr(op_idx: OpIndex, length: usize) -> bool {
+    is_var_leaf_expr(op_idx, length, MAX_LENGTH)
 }
 
 fn add_var_counts(mut var_count_1: VarCount, var_count_2: VarCount) -> Option<VarCount> {
@@ -75,8 +80,8 @@ fn add_var_counts(mut var_count_1: VarCount, var_count_2: VarCount) -> Option<Va
 
 const fn has_unlimited_var() -> bool {
     let mut i = 0;
-    while i < INPUTS.len() {
-        if INPUTS[i].max_uses == u8::MAX {
+    while i < SYMBOLS.len() {
+        if SYMBOLS[i].max_uses == u8::MAX {
             return true;
         }
         i += 1;
@@ -86,7 +91,7 @@ const fn has_unlimited_var() -> bool {
 
 fn save(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -96,8 +101,9 @@ fn save(
 ) {
     let total_length = exprs_length + expr_length + 3;
 
-    if !MATCH_1BY1 && is_leaf_expr(expr.op_idx, total_length, MAX_LENGTH) {
+    if !MATCH_1BY1 && is_leaf_expr(expr.op_idx, total_length) {
         if Matcher::match_all(exprs, &expr) {
+            print!("yes");
             for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
                 print!("{}={e};", v.name);
             }
@@ -106,16 +112,13 @@ fn save(
         return;
     }
 
-    let var_index = exprs.len();
-    let variable = &VARIABLES[var_index];
-
     let total_var_count = add_var_counts(var_count, expr.var_count).unwrap();
 
     if VARIABLES.len() == 1 {
         let cant_use_more_vars = !has_unlimited_var()
             && total_var_count
                 .iter()
-                .zip(INPUTS.iter())
+                .zip(SYMBOLS.iter())
                 .all(|(&c, i)| c == i.max_uses);
 
         if cant_use_more_vars {
@@ -130,14 +133,8 @@ fn save(
         }
     }
 
-    let min_length_needed = VARIABLES[var_index + 1..]
-        .iter()
-        .map(|var| var.min_length + 3)
-        .sum::<usize>();
-
-    let var_max_expr_length = variable
-        .max_length
-        .min(MAX_LENGTH - exprs_length - min_length_needed - 3);
+    let var_index = exprs.len();
+    let var_max_expr_length = get_var_max_expr_length(exprs_length, var_index);
 
     if expr_length <= var_max_expr_length - 2 {
         let expr_ptr: NonNullExpr = (&expr).into();
@@ -149,18 +146,20 @@ fn save(
     }
 
     if expr_length > MAX_CACHE_LENGTH {
-        let is_last_var = var_index == VARIABLES.len() - 1;
-        if is_last_var {
-            if uses_required_vars(total_var_count) && Matcher::match_all(exprs, &expr) {
-                for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
-                    print!("{}={e};", v.name);
+        if expr.op_idx.prec() < 15 {
+            let is_last_var = var_index == VARIABLES.len() - 1;
+            if is_last_var {
+                if uses_required_vars(total_var_count) && Matcher::match_all(exprs, &expr) {
+                    for (e, v) in exprs.iter().zip(VARIABLES.iter()) {
+                        print!("{}={e};", v.name);
+                    }
+                    println!("{}={expr};", VARIABLES.last().unwrap().name);
                 }
-                println!("{}={expr};", VARIABLES.last().unwrap().name);
+            } else {
+                let mut new_exprs = exprs.clone();
+                new_exprs.push(&expr);
+                find_expressions(cache.clone(), new_exprs, total_var_count, total_length);
             }
-        } else {
-            let mut new_exprs = exprs.clone();
-            new_exprs.push(&expr);
-            find_expressions(cache, new_exprs, total_var_count, total_length);
         }
 
         for dfs_len in expr_length + 2..=var_max_expr_length {
@@ -199,7 +198,7 @@ fn save(
                 &expr,
             );
         }
-        if !is_leaf_expr(OP_INDEX_PARENS, expr_length + 2, var_max_expr_length)
+        if !is_var_leaf_expr(OP_INDEX_PARENS, expr_length + 2, var_max_expr_length)
             && expr.op_idx < OP_INDEX_PARENS
         {
             save(
@@ -210,7 +209,7 @@ fn save(
                 var_count,
                 exprs_length,
                 Expr::parens((&expr).into()),
-                expr_length,
+                expr_length + 2,
             );
         }
         return;
@@ -222,7 +221,7 @@ fn save(
 #[inline(always)]
 fn find_binary_operators(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -244,13 +243,14 @@ fn find_binary_operators(
         None => return,
     };
     let total_length = exprs_length + expr_length + 3;
-    if !can_use_required_vars(total_var_count, total_length) {
+    if !can_use_required_vars(total_var_count, total_length, exprs.len()) {
         return;
     }
+
     seq!(idx in 0..100 {
         if let (Some(&op_idx), Some(op)) = (OP_BINARY_INDEX_TABLE.get(idx), BINARY_OPERATORS.get(idx)) {
             if op.name.len() == op_length && op.can_apply(el, er) {
-                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length, MAX_LENGTH) {
+                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length) {
                     let mut matcher = Matcher::new();
                     if el
                         .output
@@ -280,7 +280,7 @@ fn find_binary_operators(
 
 fn find_binary_expressions_left(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -303,11 +303,9 @@ fn find_binary_expressions_left(
             return;
 
         };
-        let el_length = expr_length - er_length - op_length;
-        for var_index in var_start_index..cache.len() {
-            for er_index in 0..cache[var_index][el_length].len() {
-                let el = unsafe { NonNull::from(&cache[var_index][el_length][er_index]).as_ref() };
-                find_binary_operators(cache_level, cache, hashset_cache, exprs, var_count, exprs_length, expr_length, &el, er, op_length);
+        for vc in &cache[var_start_index..] {
+            for el in &vc[expr_length - er_length - op_length] {
+                find_binary_operators(cache_level, cache, hashset_cache, exprs, var_count, exprs_length, expr_length, el, er, op_length);
             }
         }
     });
@@ -315,7 +313,7 @@ fn find_binary_expressions_left(
 
 fn find_binary_expressions_right(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -328,11 +326,9 @@ fn find_binary_expressions_right(
         if expr_length <= el_length + op_length {
             return;
         };
-        let er_length = expr_length - el_length - op_length;
-        for var_index in 0..cache.len() {
-            for er_index in 0..cache[var_index][er_length].len() {
-                let er = unsafe { NonNull::from(&cache[var_index][er_length][er_index]).as_ref() };
-                find_binary_operators(cache_level, cache, hashset_cache, exprs, var_count, exprs_length, expr_length, el, &er, op_length);
+        for vc in cache {
+            for er in &vc[expr_length - el_length - op_length] {
+                find_binary_operators(cache_level, cache, hashset_cache, exprs, var_count, exprs_length, expr_length, el, er, op_length);
             }
         }
     });
@@ -340,7 +336,7 @@ fn find_binary_expressions_right(
 
 fn find_unary_operators(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -353,13 +349,13 @@ fn find_unary_operators(
         Some(vc) => vc,
         None => return,
     };
-    if !can_use_required_vars(total_var_count, total_length) {
+    if !can_use_required_vars(total_var_count, total_length, exprs.len()) {
         return;
     }
     seq!(idx in 0..10 {
         if let (Some(&op_idx), Some(op)) = (OP_UNARY_INDEX_TABLE.get(idx), UNARY_OPERATORS.get(idx)) {
             if op.can_apply(er) {
-                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length, MAX_LENGTH) {
+                if MATCH_1BY1 && is_leaf_expr(op_idx, total_length) {
                     let mut matcher = Matcher::new();
                     if er
                         .output
@@ -385,7 +381,7 @@ fn find_unary_operators(
 
 fn find_unary_expressions(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -401,29 +397,25 @@ fn find_unary_expressions(
     } else {
         var_index
     };
-    let er_length = expr_length - 1;
-    for var_index in var_start_index..cache.len() {
-        for er_index in 0..cache[var_index][er_length].len() {
-            {
-                let er = unsafe { NonNull::from(&cache[var_index][er_length][er_index]).as_ref() };
-                find_unary_operators(
-                    cache_level,
-                    cache,
-                    hashset_cache,
-                    exprs,
-                    var_count,
-                    exprs_length,
-                    expr_length,
-                    er,
-                );
-            }
+    for vc in &cache[var_start_index..] {
+        for er in &vc[expr_length - 1] {
+            find_unary_operators(
+                cache_level,
+                cache,
+                hashset_cache,
+                exprs,
+                var_count,
+                exprs_length,
+                expr_length,
+                er,
+            );
         }
     }
 }
 
 fn find_parens_expressions(
     cache_level: &mut CacheLevel,
-    cache: &mut Cache,
+    cache: &Cache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -431,30 +423,37 @@ fn find_parens_expressions(
     expr_length: usize,
 ) {
     let total_length = exprs_length + expr_length + 3;
-    if expr_length < 4 || is_leaf_expr(OP_INDEX_PARENS, total_length, MAX_LENGTH) {
+    let var_index = exprs.len();
+    let max_expr_length = get_max_expr_length(exprs_length, var_index);
+    if expr_length < 4 || is_var_leaf_expr(OP_INDEX_PARENS, expr_length, max_expr_length) {
         return;
     }
-    let er_length = expr_length - 2;
-    for er_index in 0..cache.last().unwrap()[er_length].len() {
-        let er = unsafe { NonNull::from(&cache.last().unwrap()[er_length][er_index]).as_ref() };
-        let total_var_count = match add_var_counts(var_count, er.var_count) {
-            Some(vc) => vc,
-            None => continue,
-        };
-        if !can_use_required_vars(total_var_count, total_length) {
-            continue;
-        }
-        if er.op_idx < OP_INDEX_PARENS {
-            save(
-                cache_level,
-                cache,
-                hashset_cache,
-                exprs,
-                var_count,
-                exprs_length,
-                Expr::parens(er),
-                expr_length,
-            );
+    let var_start_index = if var_index == 0 || expr_length > MAX_CACHE_LENGTH {
+        0
+    } else {
+        var_index
+    };
+    for vc in &cache[var_start_index..] {
+        for er in &vc[expr_length - 2] {
+            let total_var_count = match add_var_counts(var_count, er.var_count) {
+                Some(vc) => vc,
+                None => continue,
+            };
+            if !can_use_required_vars(total_var_count, total_length, var_index) {
+                continue;
+            }
+            if er.op_idx < OP_INDEX_PARENS {
+                save(
+                    cache_level,
+                    cache,
+                    hashset_cache,
+                    exprs,
+                    var_count,
+                    exprs_length,
+                    Expr::parens(er),
+                    expr_length,
+                );
+            }
         }
     }
 }
@@ -467,7 +466,7 @@ fn find_variables_and_literals(
     let var_index = exprs.len();
     if var_index != 0 {
         cache_level.push(Expr::variable(
-            var_index + INPUTS.len() - 1,
+            INPUTS.len() + var_index - 1,
             exprs.last().unwrap().output.clone(),
         ));
         return;
@@ -527,7 +526,8 @@ fn add_to_cache(mut cn: CacheLevel, cache: &mut VarCache, hashset_cache: &mut Ha
 }
 
 fn find_expressions_length(
-    cache: &mut Cache,
+    cache: &Cache,
+    var_cache: &mut VarCache,
     hashset_cache: &mut HashSetCache,
     exprs: &Vec<&Expr>,
     var_count: VarCount,
@@ -554,11 +554,9 @@ fn find_expressions_length(
         exprs_length,
         expr_length,
     );
-
-    for var_index in 0..cache.len() {
+    for vc in cache {
         for er_length in 1..expr_length - 1 {
-            for er_index in 1..cache[var_index][er_length].len() {
-                let er = unsafe { NonNull::from(&cache[var_index][er_length][er_index]).as_ref() };
+            for er in &vc[er_length] {
                 find_binary_expressions_left(
                     &mut cache_level,
                     cache,
@@ -567,46 +565,27 @@ fn find_expressions_length(
                     var_count,
                     exprs_length,
                     expr_length,
-                    &er,
+                    er,
                     er_length,
                 );
             }
         }
     }
-    add_to_cache(cache_level, cache.last_mut().unwrap(), hashset_cache);
+    add_to_cache(cache_level, var_cache, hashset_cache);
 }
 
-fn find_expressions(cache: &mut Cache, exprs: Vec<&Expr>, var_count: VarCount, length: usize) {
+fn find_expressions(mut cache: Cache, exprs: Vec<&Expr>, var_count: VarCount, length: usize) {
     let mut hashset_cache = HashSet::new();
-    cache.push(vec![CacheLevel::new()]);
+    let mut var_cache = vec![CacheLevel::new()];
+    cache.push(unsafe { NonNull::from(&var_cache).as_ref() });
 
     let var_index = cache.len() - 1;
     let variable = &VARIABLES[var_index];
 
-    let min_length_needed = VARIABLES[var_index..]
-        .iter()
-        .map(|var| var.min_length + 3)
-        .sum::<usize>();
+    let var_max_expr_length = get_var_max_expr_length(length, var_index);
 
-    let var_max_expr_length = variable
-        .max_length
-        .min(MAX_LENGTH - length + variable.min_length - min_length_needed);
-
-    let max_expr_length = VARIABLES[var_index..]
-        .iter()
-        .map(|var| var.max_length)
-        .max()
-        .unwrap()
-        .min(
-            MAX_LENGTH - length
-                + VARIABLES[var_index..]
-                    .iter()
-                    .map(|var| var.min_length)
-                    .max()
-                    .unwrap()
-                - min_length_needed,
-        )
-        .min(var_max_expr_length.max(MAX_CACHE_LENGTH));
+    let max_expr_length =
+        get_max_expr_length(length, var_index).min(var_max_expr_length.max(MAX_CACHE_LENGTH));
 
     let mut total_count = 0;
     let start = Instant::now();
@@ -620,7 +599,8 @@ fn find_expressions(cache: &mut Cache, exprs: Vec<&Expr>, var_count: VarCount, l
             }
         }
         find_expressions_length(
-            cache,
+            &cache,
+            &mut var_cache,
             &mut hashset_cache,
             &exprs,
             var_count,
@@ -638,11 +618,13 @@ fn find_expressions(cache: &mut Cache, exprs: Vec<&Expr>, var_count: VarCount, l
     }
 
     let is_last_expr = var_index == VARIABLES.len() - 1;
-    for expr_length in variable.min_length..=variable.max_length.min(max_expr_length) {
+    for expr_length in variable.min_length..=max_expr_length {
         let total_length = length + expr_length + 3;
-        for var_index in 0..cache.len() {
-            for expr_index in 0..cache[var_index][expr_length].len() {
-                let expr = &cache[var_index][expr_length][expr_index];
+        for vc in &cache {
+            for expr in &vc[expr_length] {
+                if expr.op_idx.prec() == 15 {
+                    continue;
+                }
                 if let Some(total_var_count) = add_var_counts(var_count, expr.var_count) {
                     if is_last_expr {
                         if uses_required_vars(total_var_count) && Matcher::match_all(&exprs, expr) {
@@ -656,13 +638,11 @@ fn find_expressions(cache: &mut Cache, exprs: Vec<&Expr>, var_count: VarCount, l
                     let mut new_exprs = exprs.clone();
                     let new_expr = expr.clone();
                     new_exprs.push(&new_expr);
-                    find_expressions(cache, new_exprs, total_var_count, total_length);
+                    find_expressions(cache.clone(), new_exprs, total_var_count, total_length);
                 }
             }
         }
     }
-
-    cache.pop();
 }
 
 fn validate_input() {
@@ -695,6 +675,5 @@ fn main() {
     validate_input();
     println!("sizeof(Expr) = {}", std::mem::size_of::<Expr>());
 
-    let mut cache: Cache = Vec::new();
-    find_expressions(&mut cache, vec![], [0; SYMBOLS.len()], 0);
+    find_expressions(Cache::new(), vec![], [0; SYMBOLS.len()], 0);
 }

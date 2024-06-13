@@ -1,4 +1,4 @@
-use crate::params::{Num, INPUTS, VARIABLES};
+use crate::params::{Num, INPUTS, MAX_LENGTH, VARIABLES};
 
 #[derive(Clone, Copy)]
 pub struct Symbol {
@@ -17,9 +17,44 @@ pub struct Input {
 pub struct Variable {
     pub name: &'static str,
     pub min_length: usize,
-    pub max_length: usize,
     pub min_uses: u8,
     pub max_uses: u8,
+}
+
+pub fn get_var_max_expr_length(length: usize, var_index: usize) -> usize {
+    const fn get_var_min_length_required() -> [usize; VARIABLES.len()] {
+        let mut var_min_length_required = [0; VARIABLES.len()];
+        let mut s = 0;
+        let mut idx = VARIABLES.len() - 1;
+        while idx != 0 {
+            s += VARIABLES[idx].min_length + 3;
+            idx -= 1;
+            var_min_length_required[idx] = s;
+        }
+        var_min_length_required
+    }
+    const VAR_MIN_LENGTH_REQUIRED: [usize; VARIABLES.len()] = get_var_min_length_required();
+    MAX_LENGTH - length - VAR_MIN_LENGTH_REQUIRED[var_index] - 3
+}
+
+pub fn get_max_expr_length(length: usize, var_index: usize) -> usize {
+    const fn get_min_length_required() -> [usize; VARIABLES.len()] {
+        let mut var_min_length_required = [0; VARIABLES.len()];
+        let mut s = 0;
+        let mut m = !0;
+        let mut idx = VARIABLES.len();
+        while idx != 0 {
+            idx -= 1;
+            s += VARIABLES[idx].min_length + 3;
+            if m > VARIABLES[idx].min_length + 3 {
+                m = VARIABLES[idx].min_length + 3;
+            }
+            var_min_length_required[idx] = s - m;
+        }
+        var_min_length_required
+    }
+    const MAX_LENGTH_REQUIRED: [usize; VARIABLES.len()] = get_min_length_required();
+    MAX_LENGTH - length - MAX_LENGTH_REQUIRED[var_index] - 3
 }
 
 const fn get_symbols() -> [Symbol; INPUTS.len() + VARIABLES.len() - 1] {
