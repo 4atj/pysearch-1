@@ -41,12 +41,12 @@ pub fn get_max_expr_length(length: usize, var_index: usize) -> usize {
     const fn get_min_length_required() -> [usize; VARIABLES.len()] {
         let mut var_min_length_required = [0; VARIABLES.len()];
         let mut s = 0;
-        let mut m = !0;
+        let mut m = 0;
         let mut idx = VARIABLES.len();
         while idx != 0 {
             idx -= 1;
             s += VARIABLES[idx].min_length + 3;
-            if m > VARIABLES[idx].min_length + 3 {
+            if m < VARIABLES[idx].min_length + 3 {
                 m = VARIABLES[idx].min_length + 3;
             }
             var_min_length_required[idx] = s - m;

@@ -93,7 +93,7 @@ fn save(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr: Expr,
@@ -146,7 +146,8 @@ fn save(
     }
 
     if expr_length > MAX_CACHE_LENGTH {
-        if expr.op_idx.prec() < 15 {
+        let var = &VARIABLES[var_index];
+        if expr.op_idx.prec() < 15 && var.min_length <= expr_length {
             let is_last_var = var_index == VARIABLES.len() - 1;
             if is_last_var {
                 if uses_required_vars(total_var_count) && Matcher::match_all(exprs, &expr) {
@@ -157,7 +158,7 @@ fn save(
                 }
             } else {
                 let mut new_exprs = exprs.clone();
-                new_exprs.push(&expr);
+                new_exprs.push(expr.clone());
                 find_expressions(cache.clone(), new_exprs, total_var_count, total_length);
             }
         }
@@ -223,7 +224,7 @@ fn find_binary_operators(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -282,7 +283,7 @@ fn find_binary_expressions_left(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -315,7 +316,7 @@ fn find_binary_expressions_right(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -338,7 +339,7 @@ fn find_unary_operators(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -383,7 +384,7 @@ fn find_unary_expressions(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -417,7 +418,7 @@ fn find_parens_expressions(
     cache_level: &mut CacheLevel,
     cache: &Cache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -460,7 +461,7 @@ fn find_parens_expressions(
 
 fn find_variables_and_literals(
     cache_level: &mut CacheLevel,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     expr_length: usize,
 ) {
     let var_index = exprs.len();
@@ -529,7 +530,7 @@ fn find_expressions_length(
     cache: &Cache,
     var_cache: &mut VarCache,
     hashset_cache: &mut HashSetCache,
-    exprs: &Vec<&Expr>,
+    exprs: &Vec<Expr>,
     var_count: VarCount,
     exprs_length: usize,
     expr_length: usize,
@@ -574,7 +575,7 @@ fn find_expressions_length(
     add_to_cache(cache_level, var_cache, hashset_cache);
 }
 
-fn find_expressions(mut cache: Cache, exprs: Vec<&Expr>, var_count: VarCount, length: usize) {
+fn find_expressions(mut cache: Cache, exprs: Vec<Expr>, var_count: VarCount, length: usize) {
     let mut hashset_cache = HashSet::new();
     let mut var_cache = vec![CacheLevel::new()];
     cache.push(unsafe { NonNull::from(&var_cache).as_ref() });
@@ -608,7 +609,7 @@ fn find_expressions(mut cache: Cache, exprs: Vec<&Expr>, var_count: VarCount, le
             expr_length,
         );
         if var_index == 0 {
-            let count = cache[0][expr_length].len();
+            let count = var_cache[expr_length].len();
             total_count += count;
             let time = layer_start.elapsed();
             println!("Explored {count} expressions in {time:?}");
@@ -619,6 +620,10 @@ fn find_expressions(mut cache: Cache, exprs: Vec<&Expr>, var_count: VarCount, le
 
     let is_last_expr = var_index == VARIABLES.len() - 1;
     for expr_length in variable.min_length..=max_expr_length {
+        let layer_start = Instant::now();
+        if var_index == 0 {
+            println!("Finding length {expr_length}-{MAX_LENGTH}...")
+        }
         let total_length = length + expr_length + 3;
         for vc in &cache {
             for expr in &vc[expr_length] {
@@ -636,11 +641,16 @@ fn find_expressions(mut cache: Cache, exprs: Vec<&Expr>, var_count: VarCount, le
                         continue;
                     }
                     let mut new_exprs = exprs.clone();
-                    let new_expr = expr.clone();
-                    new_exprs.push(&new_expr);
+                    new_exprs.push(expr.clone());
                     find_expressions(cache.clone(), new_exprs, total_var_count, total_length);
                 }
             }
+        }
+        if var_index == 0 {
+            let time = layer_start.elapsed();
+            println!("Explored 0 expressions in {time:?}");
+            let total_time = start.elapsed();
+            println!("Total: 0 expressions in {total_time:?}\n");
         }
     }
 }
