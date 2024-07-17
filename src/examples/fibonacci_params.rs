@@ -2,17 +2,25 @@ use crate::{expr::Expr, operator::*, symbol::Symbol};
 
 pub type Num = i32;
 
-pub const INPUTS: &[Symbol] = &[Symbol {
-    name: "n",
-    vec: &['E' as i32, 'W' as i32, 'N' as i32, 'S' as i32],
-    min_uses: 1,
-    max_uses: 255,
-}];
+pub const INPUTS: &[Symbol] = &[];
 
 /// Contains symbols that can be set dynamically.
 /// The `vec` field is used to check the uniqueness of the expressions.
 /// The actual values are passed in the `variable_values` parameter of `Expr::eval`.
-pub const VARIABLES: &[Symbol] = &[];
+pub const VARIABLES: &[Symbol] = &[
+    Symbol {
+        name: "a",
+        vec: &[0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3],
+        min_uses: 1,
+        max_uses: 255,
+    },
+    Symbol {
+        name: "b",
+        vec: &[0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
+        min_uses: 1,
+        max_uses: 255,
+    },
+];
 
 pub struct Matcher {}
 
@@ -43,15 +51,37 @@ impl Matcher {
             )
     }
 
-    pub fn match_multi_exprs(_exprs: &[&Expr; NUM_EXPRS]) -> bool {
-        unimplemented!();
+    pub fn match_multi_exprs(exprs: &[&Expr; NUM_EXPRS]) -> bool {
+        (-1..=9).any(|a| {
+            (-1..=9).any(|b| {
+                let mut variable_values = [a, b];
+                let success = GOAL_.iter().all(|&goal| {
+                    for index in 0..VARIABLES.len() {
+                        match exprs[index].eval(0, &variable_values) {
+                            Some(output) => variable_values[index] = output,
+                            None => return false,
+                        }
+                    }
+                    exprs.last().unwrap().eval(0, &variable_values) == Some(goal)
+                });
+                if success {
+                    if a != b {
+                        print!("a={a};b={b}; ");
+                    } else {
+                        print!("a=b={b}; ");
+                    }
+                }
+                success
+            })
+        })
     }
 }
 
-pub const GOAL: &[Num] = &[1, -1, 0, 0];
+pub const GOAL: &[Num] = &[0; 16];
+pub const GOAL_: &[Num] = &[0, 1, 1, 2, 3, 5, 8];
 
 pub const MAX_LENGTH: usize = 14;
-pub const MAX_CACHE_LENGTH: usize = 10;
+pub const MAX_CACHE_LENGTH: usize = 7;
 pub const MIN_MULTITHREAD_LENGTH: usize = MAX_CACHE_LENGTH + 1;
 
 pub const NUM_EXPRS: usize = VARIABLES.len() + 1;

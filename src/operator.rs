@@ -59,7 +59,12 @@ pub struct BinaryOp {
 }
 
 impl UnaryOp {
-    pub const PREC: Prec = 12;
+    pub const EMPTY: UnaryOp = UnaryOp {
+        name: "",
+        prec: 12,
+        apply: apply_not,
+        can_apply: can_apply_unary_always,
+    };
 
     #[inline(always)]
     pub fn apply_(&self, x: Num) -> Num {
@@ -487,42 +492,45 @@ pub const OP_EXP: BinaryOp = BinaryOp {
 };
 pub const OP_BIT_NEG: UnaryOp = UnaryOp {
     name: "~",
-    prec: 12,
     apply: apply_bit_neg,
-    can_apply: can_apply_unary_always,
+    ..UnaryOp::EMPTY
 };
 pub const OP_NEG: UnaryOp = UnaryOp {
     name: "-",
-    prec: 12,
     apply: apply_neg,
-    can_apply: can_apply_unary_always,
+    ..UnaryOp::EMPTY
 };
 pub const OP_NOT: UnaryOp = UnaryOp {
     name: "!",
-    prec: 12,
     apply: apply_not,
-    can_apply: can_apply_unary_always,
+    ..UnaryOp::EMPTY
 };
 
-// All operators: [..Binary, ..Unary, Parens, Literal, Variable]
+// All operators: [..Binary, ..Unary, Parens, Literal, Symbol]
 pub const NUM_OPERATORS: usize = UNARY_OPERATORS.len() + BINARY_OPERATORS.len() + 3;
 pub const OP_INDEX_PARENS: OpIndex = OpIndex::new(0xFD);
 pub const OP_INDEX_LITERAL: OpIndex = OpIndex::new(0xFE);
-pub const OP_INDEX_VARIABLE: OpIndex = OpIndex::new(0xFF);
+pub const OP_INDEX_SYMBOL: OpIndex = OpIndex::new(0xFF);
 
-const fn gen_index_tables() -> (
+const fn gen_op_tables() -> (
     [OpIndex; BINARY_OPERATORS.len()],
     [OpIndex; UNARY_OPERATORS.len()],
+    [BinaryOp; 256],
+    [UnaryOp; 256],
 ) {
-    let mut binary_table = [OpIndex::new(0); BINARY_OPERATORS.len()];
-    let mut unary_table = [OpIndex::new(0); UNARY_OPERATORS.len()];
+    let mut binary_index_table = [OpIndex::new(0); BINARY_OPERATORS.len()];
+    let mut unary_index_table = [OpIndex::new(0); UNARY_OPERATORS.len()];
+    let mut binary_table = [BinaryOp::EMPTY; 256];
+    let mut unary_table = [UnaryOp::EMPTY; 256];
     let mut cnt = [0; 16];
 
     let mut i: usize = 0;
     while i < BINARY_OPERATORS.len() {
         let prec = BINARY_OPERATORS[i].prec;
         assert!(prec < 16 && cnt[prec as usize] < 16);
-        binary_table[i] = OpIndex(prec << 4 | cnt[prec as usize]);
+        let index = prec << 4 | cnt[prec as usize];
+        binary_index_table[i] = OpIndex(index);
+        binary_table[index as usize] = BINARY_OPERATORS[i];
         cnt[prec as usize] += 1;
         i += 1;
     }
@@ -531,16 +539,25 @@ const fn gen_index_tables() -> (
     while i < UNARY_OPERATORS.len() {
         let prec = UNARY_OPERATORS[i].prec;
         assert!(prec < 16 && cnt[prec as usize] < 16);
-        unary_table[i] = OpIndex(prec << 4 | cnt[prec as usize]);
+        let index = prec << 4 | cnt[prec as usize];
+        unary_index_table[i] = OpIndex(index);
+        unary_table[index as usize] = UNARY_OPERATORS[i];
         cnt[prec as usize] += 1;
         i += 1;
     }
 
-    (binary_table, unary_table)
+    (
+        binary_index_table,
+        unary_index_table,
+        binary_table,
+        unary_table,
+    )
 }
 
-pub const OP_BINARY_INDEX_TABLE: [OpIndex; BINARY_OPERATORS.len()] = gen_index_tables().0;
-pub const OP_UNARY_INDEX_TABLE: [OpIndex; UNARY_OPERATORS.len()] = gen_index_tables().1;
+pub const OP_BINARY_INDEX_TABLE: [OpIndex; BINARY_OPERATORS.len()] = gen_op_tables().0;
+pub const OP_UNARY_INDEX_TABLE: [OpIndex; UNARY_OPERATORS.len()] = gen_op_tables().1;
+pub const OP_BINARY_TABLE: [BinaryOp; 256] = gen_op_tables().2;
+pub const OP_UNARY_TABLE: [UnaryOp; 256] = gen_op_tables().3;
 pub const OP_NAME_TABLE: [&'static str; 256] = {
     let mut table = [""; 256];
     let mut i: usize = 0;

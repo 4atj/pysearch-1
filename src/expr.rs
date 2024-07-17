@@ -3,18 +3,19 @@ use std::{fmt::Display, ptr::NonNull};
 
 use crate::{
     operator::*,
-    params::{Num, INPUTS},
+    params::{Num, INPUTS, VARIABLES},
+    symbol::SYMBOLS,
     vec::Vector,
 };
 
-pub type VarCount = [u8; INPUTS.len()];
+pub type SymCount = [u8; SYMBOLS.len()];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Expr {
     pub left: Option<NonNull<Expr>>,
     pub right: Option<NonNull<Expr>>,
     pub op_idx: OpIndex,
-    pub var_count: VarCount,
+    pub sym_count: SymCount,
     pub output: Vector,
 }
 unsafe impl Send for Expr {}
@@ -25,14 +26,44 @@ impl Expr {
         self.op_idx.prec()
     }
 
-    pub fn variable(index: usize, output: Vector) -> Self {
-        let mut var_count = [0; INPUTS.len()];
-        var_count[index] = 1;
+    pub fn eval(&self, index: usize, variable_values: &[Num; VARIABLES.len()]) -> Option<Num> {
+        if self.sym_count[INPUTS.len()..].iter().all(|&c| c == 0) {
+            return Some(unsafe { *self.output.get_unchecked(index) });
+        }
+        if self.op_idx == OP_INDEX_SYMBOL {
+            return Some(unsafe {
+                *variable_values.get_unchecked(
+                    self.sym_count
+                        .iter()
+                        .position(|&x| x == 1)
+                        .unwrap_unchecked()
+                        - INPUTS.len(),
+                )
+            });
+        }
+        match unsafe { self.right.unwrap_unchecked().as_ref() }.eval(index, variable_values) {
+            Some(output_right) => match self.left {
+                Some(left) => match unsafe { left.as_ref() }.eval(index, variable_values) {
+                    Some(output_left) => {
+                        unsafe { left.as_ref() }.eval(index, variable_values);
+                        (OP_BINARY_TABLE[self.op_idx.as_index()].apply)(output_left, output_right)
+                    }
+                    None => None,
+                },
+                None => Some((OP_UNARY_TABLE[self.op_idx.as_index()].apply)(output_right)),
+            },
+            None => None,
+        }
+    }
+
+    pub fn symbol(index: usize, output: Vector) -> Self {
+        let mut sym_count = [0; SYMBOLS.len()];
+        sym_count[index] = 1;
         Self {
             left: None,
             right: None,
-            op_idx: OP_INDEX_VARIABLE,
-            var_count,
+            op_idx: OP_INDEX_SYMBOL,
+            sym_count,
             output,
         }
     }
@@ -42,27 +73,27 @@ impl Expr {
             left: None,
             right: None,
             op_idx: OP_INDEX_LITERAL,
-            var_count: [0; INPUTS.len()],
+            sym_count: [0; SYMBOLS.len()],
             output: Vector::constant(value),
         }
     }
 
     pub fn is_literal(&self) -> bool {
-        self.var_count.iter().all(|&var_count| var_count == 0)
+        self.sym_count.iter().all(|&sym_count| sym_count == 0)
     }
 
     pub fn bin(
         el: NonNull<Expr>,
         er: NonNull<Expr>,
         op_idx: OpIndex,
-        var_count: VarCount,
+        sym_count: SymCount,
         output: Vector,
     ) -> Self {
         Self {
             left: Some(el),
             right: Some(er),
             op_idx,
-            var_count,
+            sym_count,
             output,
         }
     }
@@ -72,7 +103,7 @@ impl Expr {
             left: None,
             right: Some(er.into()),
             op_idx,
-            var_count: er.var_count,
+            sym_count: er.sym_count,
             output,
         }
     }
@@ -82,7 +113,7 @@ impl Expr {
             left: None,
             right: Some(er.into()),
             op_idx: OP_INDEX_PARENS,
-            var_count: er.var_count,
+            sym_count: er.sym_count,
             output: er.output.clone(),
         }
     }
@@ -99,11 +130,11 @@ impl Display for Expr {
             if self.op_idx == OP_INDEX_PARENS {
                 write!(f, ")")?;
             }
-        } else if self.op_idx == OP_INDEX_VARIABLE {
+        } else if self.op_idx == OP_INDEX_SYMBOL {
             write!(
                 f,
                 "{}",
-                INPUTS[self.var_count.iter().position(|&c| c == 1).unwrap()].name
+                SYMBOLS[self.sym_count.iter().position(|&c| c == 1).unwrap()].name
             )?;
         } else {
             write!(f, "{}", self.output[0])?;
@@ -162,7 +193,7 @@ pub fn ok_before_keyword(e: &Expr) -> bool {
 // "or3", "orn" are invalid. Need a unary op or parens.
 pub fn ok_after_keyword(e: &Expr) -> bool {
     match e.left {
-        None => e.op_idx != OP_INDEX_LITERAL && e.op_idx != OP_INDEX_VARIABLE,
+        None => e.op_idx != OP_INDEX_LITERAL && e.op_idx != OP_INDEX_SYMBOL,
         Some(left) => ok_after_keyword(unsafe { left.as_ref() }),
     }
 }
